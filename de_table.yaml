@@ -1,0 +1,64 @@
+dag:
+  dag_id: bank_transaction_pipeline
+  description: "Daily bank transaction processing DAG"
+  owner: data_engineering_team
+  start_date: 2026-01-01
+  schedule_interval: "0 2 * * *"
+  catchup: false
+  retries: 3
+  retry_delay_minutes: 5
+  tags:
+    - banking
+    - transactions
+    - fraud-detection
+
+default_args:
+  email:
+    - dataops@bank.com
+  email_on_failure: true
+  email_on_retry: false
+  depends_on_past: false
+
+tasks:
+  - task_id: extract_transactions
+    type: sql
+    connection_id: bank_db
+    query: |
+      SELECT *
+      FROM transactions
+      WHERE transaction_date = CURRENT_DATE;
+    retries: 2
+
+  - task_id: validate_transactions
+    type: python
+    script: scripts/validate_transactions.py
+    input: extract_transactions
+    retries: 1
+
+  - task_id: fraud_detection
+    type: python
+    script: scripts/fraud_model_scoring.py
+    input: validate_transactions
+    retries: 2
+
+  - task_id: load_to_warehouse
+    type: sql
+    connection_id: data_warehouse
+    query: |
+      INSERT INTO dw_transactions
+      SELECT * FROM validated_transactions;
+
+  - task_id: generate_reports
+    type: python
+    script: scripts/generate_daily_reports.py
+    input: load_to_warehouse
+
+dependencies:
+  - upstream: extract_transactions
+    downstream: validate_transactions
+  - upstream: validate_transactions
+    downstream: fraud_detection
+  - upstream: fraud_detection
+    downstream: load_to_warehouse
+  - upstream: load_to_warehouse
+    downstream: generate_reports
